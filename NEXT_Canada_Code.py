@@ -254,9 +254,9 @@ def run_matching(mentor_csv_path, founder_csv_path):
         # build a line with "MentorName - FounderName - MentorName's X Choice - FounderName's Y Choice - Score=Z"
         line_str = (
             f"{mentor_name} - {founder_name} - "
-            f"{mentor_name}'s {choice_label(mentor_points)} - "
+            f": {mentor_name}'s {choice_label(mentor_points)} - "
             f"{founder_name}'s {choice_label(founder_points)} - "
-            f"Score={w}"
+            f": Score= {w} "
         )
 
         result_lines.append(line_str)
