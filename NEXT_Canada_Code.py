@@ -15,7 +15,7 @@ def load_mentor_data(mentor_csv):
       mentor_prefs = {mentorName: {founderName: points, ...}}
       mentor_caps  = {mentorName: capacity}
     """
-    rank_to_points = {0:5, 1:4, 2:3, 3:2, 4:1}
+    rank_to_points = {0: 5, 1: 4, 2: 3, 3: 2, 4: 1}
     mentor_prefs = {}
     mentor_caps = {}
 
@@ -54,7 +54,7 @@ def load_founder_data(founder_csv):
     Returns:
       founder_prefs = {founderName: {mentorName: points, ...}}
     """
-    rank_to_points = {0:5, 1:4, 2:3, 3:2, 4:1}
+    rank_to_points = {0: 5, 1: 4, 2: 3, 3: 2, 4: 1}
     founder_prefs = {}
 
     with open(founder_csv, mode='r', encoding='utf-8-sig') as f:
@@ -122,11 +122,9 @@ def expand_founders_by_capacity(founder_prefs, founder_caps):
 ### 3. BUILD A BIPARTITE GRAPH & RUN MAX-WEIGHT MATCHING
 ############################################################################
 
-def build_bipartite_graph(
-    expanded_mentor_prefs, slot_to_mentor,
-    expanded_founder_prefs, slot_to_founder,
-    overlap_bonus=2
-):
+def build_bipartite_graph(expanded_mentor_prefs, slot_to_mentor,
+                          expanded_founder_prefs, slot_to_founder,
+                          overlap_bonus=2):
     """
     Creates a bipartite Graph:
       - Left nodes = mentor slots
@@ -197,8 +195,11 @@ def run_matching(mentor_csv_path, founder_csv_path):
     Reads the CSVs, runs the matching, and returns two items:
       1) result_lines: multi-line text output for display.
       2) pairs_data:   a list of dicts for CSV export with the columns:
-             Mentor Name, Venture Name, Mentor's Choice, Venture's Choice, Total Points.
+             Mentor Name, Venture Name, Mentor's Choice,
+             Venture's Choice, Total Points
+             (For Mentor's and Venture's Choice, we include the name in the text.)
     """
+
     # 1. Load data
     mentor_prefs, mentor_caps = load_mentor_data(mentor_csv_path)
     founder_prefs = load_founder_data(founder_csv_path)
@@ -227,7 +228,7 @@ def run_matching(mentor_csv_path, founder_csv_path):
 
     for edge in matched_edges:
         nodeA, nodeB = list(edge)
-        # Determine which node is mentor slot vs. founder slot
+        # Determine which is mentor slot vs. founder slot
         if nodeA in expanded_mentor_prefs:
             ms, fs = nodeA, nodeB
         else:
@@ -240,13 +241,15 @@ def run_matching(mentor_csv_path, founder_csv_path):
             continue
         used_pairs.add((mentor_name, founder_name))
 
+        # Synergy (total points)
         w = G[nodeA][nodeB]["weight"]
         total_weight += w
 
+        # Retrieve rank points for each side
         mentor_points = expanded_mentor_prefs[ms].get(founder_name, 0)
         founder_points = expanded_founder_prefs[fs].get(mentor_name, 0)
 
-        # Build the multi-line text output
+        # Build multi-line text output
         heading = f"Match {match_index}"
         line1 = f"{mentor_name} <----> {founder_name}"
         line2 = f"- {mentor_name}'s {choice_label(mentor_points)} and {founder_name}'s {choice_label(founder_points)}"
@@ -256,9 +259,9 @@ def run_matching(mentor_csv_path, founder_csv_path):
         result_lines.append(line1)
         result_lines.append(line2)
         result_lines.append(line3)
-        result_lines.append("")  # blank line
+        result_lines.append("")  # blank line for spacing
 
-        # Build CSV row with extended text for columns C and D
+        # Build CSV row (with extended text in columns C and D)
         pairs_data.append({
             "Mentor Name": mentor_name,
             "Venture Name": founder_name,
@@ -269,16 +272,37 @@ def run_matching(mentor_csv_path, founder_csv_path):
 
         match_index += 1
 
-    # Append summary lines
+    # Append summary lines to the multi-line output
     result_lines.append(f"Number of unique mentor–founder pairs: {len(used_pairs)}")
     result_lines.append(f"Total synergy across matched pairs: {total_weight}")
+
+    # Build match count summaries for mentors and founders
+    mentor_match_counts = {}
+    founder_match_counts = {}
+
+    for mentor, founder in used_pairs:
+        mentor_match_counts[mentor] = mentor_match_counts.get(mentor, 0) + 1
+        founder_match_counts[founder] = founder_match_counts.get(founder, 0) + 1
+
+    result_lines.append("")
+    result_lines.append("=== Mentor Matches ===")
+    for mentor, count in mentor_match_counts.items():
+        # mentor_caps holds the capacity for each mentor
+        cap = mentor_caps.get(mentor, "?")
+        result_lines.append(f"{mentor}: {count}/{cap} matches")
+
+    result_lines.append("")
+    result_lines.append("=== Founder Matches ===")
+    for founder, count in founder_match_counts.items():
+        # For founders we default to a capacity of 2
+        result_lines.append(f"{founder}: {count}/2 matches")
+    result_lines.append("")
 
     return result_lines, pairs_data
 
 
-# Optional: if you want to run it from the command line:
 if __name__ == "__main__":
-    output_lines, output_data = run_matching("Mentor Matching_Mentor Rankings-Grid view.csv",
-                                             "Mentor Matching_Founder Rankings-Grid view.csv")
-    for line in output_lines:
+    test_output, test_data = run_matching("Mentor Matching_Mentor Rankings-Grid view.csv",
+                                          "Mentor Matching_Founder Rankings-Grid view.csv")
+    for line in test_output:
         print(line)
