@@ -283,5 +283,3 @@ if __name__ == "__main__":
                                "Mentor Matching_Founder Rankings-Grid view.csv")
     for line in test_output:
         print(line)
-
-
