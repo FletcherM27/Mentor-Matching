@@ -85,10 +85,7 @@ def load_founder_data(founder_csv):
 
 def expand_mentors_by_capacity(mentor_prefs, mentor_caps):
     """
-    For each mentor M with capacity c, create c slots:
-       M_slot1..M_slotc
-    expanded_mentor_prefs[M_slot_i] = same preference dict as M
-    slot_to_mentor[M_slot_i] = M
+    For each mentor M with capacity c, create c slots.
     """
     expanded_mentor_prefs = {}
     slot_to_mentor = {}
@@ -104,10 +101,7 @@ def expand_mentors_by_capacity(mentor_prefs, mentor_caps):
 
 def expand_founders_by_capacity(founder_prefs, founder_caps):
     """
-    For each founder F with capacity c, create c slots:
-       F_slot1..F_slotc
-    expanded_founder_prefs[F_slot_i] = same preference dict as F
-    slot_to_founder[F_slot_i] = F
+    For each founder F with capacity c, create c slots.
     """
     expanded_founder_prefs = {}
     slot_to_founder = {}
@@ -155,7 +149,7 @@ def build_bipartite_graph(
             # If both are 0, no synergy => skip
             if mentor_points > 0 or founder_points > 0:
                 total = mentor_points + founder_points
-                # if both sides rank each other, add overlap bonus
+                # if both sides rank each other, add overlap
                 if mentor_points > 0 and founder_points > 0:
                     total += overlap_bonus
 
@@ -167,7 +161,6 @@ def build_bipartite_graph(
 def run_maximum_cardinality_max_weight(G):
     """
     Return the edges from nx.max_weight_matching(G, maxcardinality=True).
-    Yields a set of frozensets({nodeA, nodeB}).
     """
     return nx.max_weight_matching(G, maxcardinality=True)
 
@@ -176,9 +169,7 @@ def run_maximum_cardinality_max_weight(G):
 ############################################################################
 
 def choice_label(points):
-    """
-    Convert the 5-4-3-2-1 system into "First Choice", "Second Choice", etc.
-    """
+    """Convert the 5..1 system into 'First Choice', 'Second Choice', etc."""
     if points == 5:
         return "First Choice"
     elif points == 4:
@@ -221,11 +212,11 @@ def run_matching(mentor_csv_path, founder_csv_path):
 
     matched_edges = run_maximum_cardinality_max_weight(G)
 
-    # 5. Interpret results, removing duplicates, building custom lines
+    # 5. Interpret results, removing duplicate real pairs
     used_pairs = set()
     total_weight = 0.0
     result_lines = []
-    result_lines.append("=== MAX-CARDINALITY MATCHING (DETAILED FORMAT) ===")
+    match_count = 0
 
     for edge in matched_edges:
         nodeA, nodeB = list(edge)
@@ -247,22 +238,29 @@ def run_matching(mentor_csv_path, founder_csv_path):
         w = G[nodeA][nodeB]["weight"]
         total_weight += w
 
-        # figure out each side's raw rank points
+        # each side's rank points
         mentor_points = expanded_mentor_prefs[ms].get(founder_name, 0)
         founder_points = expanded_founder_prefs[fs].get(mentor_name, 0)
 
-        # build a line with "MentorName - FounderName - MentorName's X Choice - FounderName's Y Choice - Score=Z"
-        line_str = (
-            f"{mentor_name} - {founder_name}:  "
-            f"  {mentor_name}'s {choice_label(mentor_points)} "
-            f"{founder_name}'s {choice_label(founder_points)}: "
-            f"  Score= {w} "
+        # increment match count
+        match_count += 1
+
+        # Build multi-line formatting:
+        # "Match One\n{Mentor} <----> {Founder} - {Mentor's Choice} - {Founder's Choice} - Score={x}"
+        line1 = f"Match {match_count}"
+        line2 = (
+            f"{mentor_name} <----> {founder_name} - "
+            f"{founder_name} ranked on {mentor_name}'s list: {choice_label(mentor_points)} - "
+            f"{mentor_name} ranked on {founder_name}'s list: {choice_label(founder_points)} - "
+            f"Total Points = {w}"
         )
+        # Add blank line or not as needed
+        result_lines.append(line1)
+        result_lines.append(line2)
+        result_lines.append("")  # blank line after each match
 
-        result_lines.append(line_str)
-
-    # 6. Final summary lines
-    result_lines.append(f"\nNumber of unique mentor–founder pairs: {len(used_pairs)}")
+    # At the end, add total synergy info
+    result_lines.append(f"Number of unique mentor–founder pairs: {len(used_pairs)}")
     result_lines.append(f"Total synergy across matched pairs: {total_weight}")
 
     return result_lines
