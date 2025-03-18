@@ -196,13 +196,18 @@ def choice_label(points):
 
 def run_matching(mentor_csv_path, founder_csv_path):
     """
-    Returns (result_lines, pairs_data)
+    The function that Streamlit calls.
 
-    result_lines: The multi-line text for on-screen display
-    pairs_data: A list of dicts for each matched pair, 
-                suitable for CSV export with columns:
-                [Mentor Name, Venture Name, Mentor's Choice,
-                 Venture's Choice, Total Points]
+    It returns two items:
+      1) result_lines: multi-line text output
+      2) pairs_data:   a list of dicts for CSV export
+                       Each dict has the columns:
+                         Mentor Name
+                         Venture Name
+                         Mentor's Choice
+                         Venture's Choice
+                         Total Points
+    The rest of the logic is unchanged from your original code.
     """
 
     # 1. Load data
@@ -224,9 +229,9 @@ def run_matching(mentor_csv_path, founder_csv_path):
 
     matched_edges = run_maximum_cardinality_max_weight(G)
 
+    # 5. Interpret results in multi-line format (unchanged)
     used_pairs = set()
     total_weight = 0.0
-
     result_lines = []
     pairs_data = []  # for CSV
 
@@ -243,6 +248,7 @@ def run_matching(mentor_csv_path, founder_csv_path):
         mentor_name = slot_to_mentor[ms]
         founder_name = slot_to_founder[fs]
 
+        # skip duplicates
         if (mentor_name, founder_name) in used_pairs:
             continue
         used_pairs.add((mentor_name, founder_name))
@@ -251,11 +257,11 @@ def run_matching(mentor_csv_path, founder_csv_path):
         w = G[nodeA][nodeB]["weight"]
         total_weight += w
 
-        # rank points for each side
+        # points
         mentor_points = expanded_mentor_prefs[ms].get(founder_name, 0)
         founder_points = expanded_founder_prefs[fs].get(mentor_name, 0)
 
-        # Build text lines for on-screen
+        # multi-line text output
         heading = f"Match {match_index}"
         line1 = f"{mentor_name} <----> {founder_name}"
         line2 = (f"- {mentor_name}'s {choice_label(mentor_points)} "
@@ -266,9 +272,9 @@ def run_matching(mentor_csv_path, founder_csv_path):
         result_lines.append(line1)
         result_lines.append(line2)
         result_lines.append(line3)
-        result_lines.append("")
+        result_lines.append("")  # blank line for spacing
 
-        # Build a dict row for CSV export
+        # build CSV row
         pairs_data.append({
             "Mentor Name": mentor_name,
             "Venture Name": founder_name,
@@ -279,15 +285,17 @@ def run_matching(mentor_csv_path, founder_csv_path):
 
         match_index += 1
 
-    # summary lines
+    # final summary
     result_lines.append(f"Number of unique mentor–founder pairs: {len(used_pairs)}")
     result_lines.append(f"Total synergy across matched pairs: {total_weight}")
 
+    # return the lines + the CSV data
     return result_lines, pairs_data
 
 
+# If you want to run this from the command line, unchanged
 if __name__ == "__main__":
-    lines, data = run_matching("Mentor Matching_Mentor Rankings-Grid view.csv",
-                               "Mentor Matching_Founder Rankings-Grid view.csv")
-    for ln in lines:
-        print(ln)
+    test_output, test_data = run_matching("Mentor Matching_Mentor Rankings-Grid view.csv",
+                                         "Mentor Matching_Founder Rankings-Grid view.csv")
+    for line in test_output:
+        print(line)
