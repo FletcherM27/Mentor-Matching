@@ -133,7 +133,8 @@ def build_bipartite_graph(
     Creates a bipartite Graph:
       - Left nodes = mentor slots
       - Right nodes = founder slots
-      - Edge weight = (mentor_points + founder_points) + overlap_bonus if both sides >0
+      - Edge weight = (mentor_points + founder_points)
+                     + overlap_bonus if both sides > 0
     """
     G = nx.Graph()
 
@@ -151,6 +152,7 @@ def build_bipartite_graph(
             mentor_points = expanded_mentor_prefs[ms].get(founder_name, 0)
             founder_points = expanded_founder_prefs[fs].get(mentor_name, 0)
 
+            # If both are 0, no synergy => skip
             if mentor_points > 0 or founder_points > 0:
                 total = mentor_points + founder_points
                 # if both sides rank each other, add overlap bonus
@@ -170,12 +172,33 @@ def run_maximum_cardinality_max_weight(G):
     return nx.max_weight_matching(G, maxcardinality=True)
 
 ############################################################################
-### 4. THE FUNCTION STREAMLIT WILL CALL
+### 4. CHOICE LABEL HELPER
+############################################################################
+
+def choice_label(points):
+    """
+    Convert the 5-4-3-2-1 system into "First Choice", "Second Choice", etc.
+    """
+    if points == 5:
+        return "First Choice"
+    elif points == 4:
+        return "Second Choice"
+    elif points == 3:
+        return "Third Choice"
+    elif points == 2:
+        return "Fourth Choice"
+    elif points == 1:
+        return "Fifth Choice"
+    else:
+        return "Unranked"
+
+############################################################################
+### 5. THE FUNCTION STREAMLIT WILL CALL
 ############################################################################
 
 def run_matching(mentor_csv_path, founder_csv_path):
     """
-    The function that Streamlit calls. 
+    The function that Streamlit calls.
     Reads the CSVs, runs the matching, returns the results as a list of strings.
     """
 
@@ -198,10 +221,11 @@ def run_matching(mentor_csv_path, founder_csv_path):
 
     matched_edges = run_maximum_cardinality_max_weight(G)
 
-    # 5. Interpret results, removing duplicate real pairs
-    assignment = {}
+    # 5. Interpret results, removing duplicates, building custom lines
     used_pairs = set()
     total_weight = 0.0
+    result_lines = []
+    result_lines.append("=== MAX-CARDINALITY MATCHING (DETAILED FORMAT) ===")
 
     for edge in matched_edges:
         nodeA, nodeB = list(edge)
@@ -214,24 +238,30 @@ def run_matching(mentor_csv_path, founder_csv_path):
         mentor_name = slot_to_mentor[ms]
         founder_name = slot_to_founder[fs]
 
+        # skip duplicates
         if (mentor_name, founder_name) in used_pairs:
             continue
         used_pairs.add((mentor_name, founder_name))
 
+        # total synergy for this edge
         w = G[nodeA][nodeB]["weight"]
         total_weight += w
 
-        if mentor_name not in assignment:
-            assignment[mentor_name] = []
-        assignment[mentor_name].append((founder_name, w))
+        # figure out each side's raw rank points
+        mentor_points = expanded_mentor_prefs[ms].get(founder_name, 0)
+        founder_points = expanded_founder_prefs[fs].get(mentor_name, 0)
 
-    # 6. Build a list of strings to return to Streamlit
-    result_lines = []
-    result_lines.append("=== MAX-CARDINALITY MATCHING (OVERLAP BONUS=2) ===")
-    for m, pairs in assignment.items():
-        for (f, weight) in pairs:
-            result_lines.append(f"{m} <--> {f} [Score={weight}]")
+        # build a line with "MentorName - FounderName - MentorName's X Choice - FounderName's Y Choice - Score=Z"
+        line_str = (
+            f"{mentor_name} - {founder_name} - "
+            f"{mentor_name}'s {choice_label(mentor_points)} - "
+            f"{founder_name}'s {choice_label(founder_points)} - "
+            f"Score={w}"
+        )
 
+        result_lines.append(line_str)
+
+    # 6. Final summary lines
     result_lines.append(f"\nNumber of unique mentor–founder pairs: {len(used_pairs)}")
     result_lines.append(f"Total synergy across matched pairs: {total_weight}")
 
