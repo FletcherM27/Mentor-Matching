@@ -1,308 +1,501 @@
 import csv
 import networkx as nx
 
+
 ############################################################################
-### 1. LOADING DATA
+### 1. CONSTANTS / HELPERS
+############################################################################
+
+DEFAULT_FOUNDER_CAPACITY = 2
+DEFAULT_OVERLAP_BONUS = 2
+RANK_TO_POINTS = {0: 5, 1: 4, 2: 3, 3: 2, 4: 1}
+POINTS_TO_LABEL = {
+    5: "First Choice",
+    4: "Second Choice",
+    3: "Third Choice",
+    2: "Fourth Choice",
+    1: "Fifth Choice",
+}
+
+
+def choice_label(points):
+    return POINTS_TO_LABEL.get(points, "Unranked")
+
+
+def top_choice_name(pref_dict):
+    for name, points in pref_dict.items():
+        if points == 5:
+            return name
+    return None
+
+
+def build_pref_dict(picks, row_num, owner_name, owner_type):
+    prefs_dict = {}
+    seen = set()
+
+    for i, raw_pick in enumerate(picks):
+        pick = raw_pick.strip()
+        if not pick:
+            continue
+        if pick in seen:
+            raise ValueError(
+                f"Duplicate pick '{pick}' found in {owner_type} '{owner_name}' on row {row_num}."
+            )
+        seen.add(pick)
+        prefs_dict[pick] = RANK_TO_POINTS[i]
+
+    return prefs_dict
+
+
+############################################################################
+### 2. LOADING DATA
 ############################################################################
 
 def load_mentor_data(mentor_csv):
-    """
-    CSV columns (example):
-      0: Mentor Name
-      1..5: top picks
-      6: Mentor capacity (int)
-    Returns:
-      mentor_prefs = {mentorName: {founderName: points, ...}}
-      mentor_caps  = {mentorName: capacity}
-    """
-    rank_to_points = {0: 5, 1: 4, 2: 3, 3: 2, 4: 1}
     mentor_prefs = {}
     mentor_caps = {}
 
-    with open(mentor_csv, mode='r', encoding='utf-8-sig') as f:
+    with open(mentor_csv, mode="r", encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
-        header = next(reader, None)  # skip header row
-        for row in reader:
-            if not row:
+        next(reader, None)  # skip header
+
+        for row_num, row in enumerate(reader, start=2):
+            if not row or not any(cell.strip() for cell in row):
                 continue
+
+            row = list(row)
+            if len(row) < 7:
+                row += [""] * (7 - len(row))
+
             mentor_name = row[0].strip()
+            if not mentor_name:
+                raise ValueError(f"Blank mentor name on row {row_num}.")
+            if mentor_name in mentor_prefs:
+                raise ValueError(f"Duplicate mentor name '{mentor_name}' on row {row_num}.")
+
             picks = row[1:6]
-            capacity_str = row[6] if len(row) >= 7 else "1"
+            capacity_str = row[6].strip()
+
+            if not capacity_str:
+                raise ValueError(
+                    f"Missing mentor capacity for '{mentor_name}' on row {row_num}."
+                )
 
             try:
-                capacity = int(float(capacity_str.strip()))
-            except ValueError:
-                capacity = 1
+                capacity = int(float(capacity_str))
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid mentor capacity '{capacity_str}' for '{mentor_name}' on row {row_num}."
+                ) from exc
 
-            prefs_dict = {}
-            for i, pick in enumerate(picks):
-                p = pick.strip()
-                if p:
-                    prefs_dict[p] = rank_to_points[i]
+            if capacity < 0:
+                raise ValueError(
+                    f"Mentor capacity cannot be negative for '{mentor_name}' on row {row_num}."
+                )
 
-            mentor_prefs[mentor_name] = prefs_dict
+            mentor_prefs[mentor_name] = build_pref_dict(
+                picks, row_num=row_num, owner_name=mentor_name, owner_type="mentor"
+            )
             mentor_caps[mentor_name] = capacity
 
     return mentor_prefs, mentor_caps
 
 
 def load_founder_data(founder_csv):
-    """
-    CSV columns (example):
-      0: Founder Name
-      1..5: top picks
-    Returns:
-      founder_prefs = {founderName: {mentorName: points, ...}}
-    """
-    rank_to_points = {0: 5, 1: 4, 2: 3, 3: 2, 4: 1}
     founder_prefs = {}
 
-    with open(founder_csv, mode='r', encoding='utf-8-sig') as f:
+    with open(founder_csv, mode="r", encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
-        header = next(reader, None)
-        for row in reader:
-            if not row:
+        next(reader, None)  # skip header
+
+        for row_num, row in enumerate(reader, start=2):
+            if not row or not any(cell.strip() for cell in row):
                 continue
 
+            row = list(row)
+            if len(row) < 6:
+                row += [""] * (6 - len(row))
+
             founder_name = row[0].strip()
+            if not founder_name:
+                raise ValueError(f"Blank founder name on row {row_num}.")
+            if founder_name in founder_prefs:
+                raise ValueError(f"Duplicate founder name '{founder_name}' on row {row_num}.")
+
             picks = row[1:6]
 
-            prefs_dict = {}
-            for i, pick in enumerate(picks):
-                pick = pick.strip()
-                if pick:
-                    prefs_dict[pick] = rank_to_points[i]
-
-            founder_prefs[founder_name] = prefs_dict
+            founder_prefs[founder_name] = build_pref_dict(
+                picks, row_num=row_num, owner_name=founder_name, owner_type="founder"
+            )
 
     return founder_prefs
 
-############################################################################
-### 2. EXPAND (REPLICATE) MENTORS & FOUNDERS BY CAPACITY
-############################################################################
 
-def expand_mentors_by_capacity(mentor_prefs, mentor_caps):
-    """
-    For each mentor M with capacity c, create c slots:
-       M_slot1..M_slotc
-    expanded_mentor_prefs[M_slot_i] = same preference dict as M
-    slot_to_mentor[M_slot_i] = M
-    """
-    expanded_mentor_prefs = {}
-    slot_to_mentor = {}
+def validate_cross_references(mentor_prefs, founder_prefs):
+    unknown_founders = []
+    for mentor_name, prefs in mentor_prefs.items():
+        for founder_name in prefs:
+            if founder_name not in founder_prefs:
+                unknown_founders.append((mentor_name, founder_name))
 
-    for mentor_name, capacity in mentor_caps.items():
-        for i in range(capacity):
-            slot_name = f"{mentor_name}_slot{i+1}"
-            expanded_mentor_prefs[slot_name] = mentor_prefs[mentor_name]
-            slot_to_mentor[slot_name] = mentor_name
+    unknown_mentors = []
+    for founder_name, prefs in founder_prefs.items():
+        for mentor_name in prefs:
+            if mentor_name not in mentor_prefs:
+                unknown_mentors.append((founder_name, mentor_name))
 
-    return expanded_mentor_prefs, slot_to_mentor
+    messages = []
 
+    if unknown_founders:
+        examples = ", ".join(
+            f"{mentor} -> {founder}" for mentor, founder in unknown_founders[:10]
+        )
+        messages.append(
+            "These mentor rankings reference founder names that do not exist in the founder file: "
+            + examples
+        )
 
-def expand_founders_by_capacity(founder_prefs, founder_caps):
-    """
-    For each founder F with capacity c, create c slots:
-       F_slot1..F_slotc
-    expanded_founder_prefs[F_slot_i] = same preference dict as F
-    slot_to_founder[F_slot_i] = F
-    """
-    expanded_founder_prefs = {}
-    slot_to_founder = {}
+    if unknown_mentors:
+        examples = ", ".join(
+            f"{founder} -> {mentor}" for founder, mentor in unknown_mentors[:10]
+        )
+        messages.append(
+            "These founder rankings reference mentor names that do not exist in the mentor file: "
+            + examples
+        )
 
-    for founder_name, capacity in founder_caps.items():
-        for i in range(capacity):
-            slot_name = f"{founder_name}_slot{i+1}"
-            expanded_founder_prefs[slot_name] = founder_prefs[founder_name]
-            slot_to_founder[slot_name] = founder_name
+    if messages:
+        raise ValueError("\n".join(messages))
 
-    return expanded_founder_prefs, slot_to_founder
 
 ############################################################################
-### 3. BUILD A BIPARTITE GRAPH & RUN MAX-WEIGHT MATCHING
+### 3. SCORING
 ############################################################################
 
-def build_bipartite_graph(expanded_mentor_prefs, slot_to_mentor,
-                          expanded_founder_prefs, slot_to_founder,
-                          overlap_bonus=2):
-    """
-    Creates a bipartite Graph:
-      - Left nodes = mentor slots
-      - Right nodes = founder slots
-      - Edge weight = (mentor_points + founder_points)
-                     + overlap_bonus if both sides > 0
-    """
-    G = nx.Graph()
+def get_pair_breakdown(mentor_name, founder_name, mentor_prefs, founder_prefs, overlap_bonus=DEFAULT_OVERLAP_BONUS):
+    mentor_points = mentor_prefs.get(mentor_name, {}).get(founder_name, 0)
+    founder_points = founder_prefs.get(founder_name, {}).get(mentor_name, 0)
 
-    mentor_slots = list(expanded_mentor_prefs.keys())
-    founder_slots = list(expanded_founder_prefs.keys())
+    total_points = mentor_points + founder_points
+    mutual_rank = mentor_points > 0 and founder_points > 0
+    if mutual_rank:
+        total_points += overlap_bonus
 
-    G.add_nodes_from(mentor_slots, bipartite=0)
-    G.add_nodes_from(founder_slots, bipartite=1)
+    return {
+        "mentor_points": mentor_points,
+        "founder_points": founder_points,
+        "mutual_rank": mutual_rank,
+        "total_points": total_points,
+    }
 
-    for ms in mentor_slots:
-        for fs in founder_slots:
-            mentor_name = slot_to_mentor[ms]
-            founder_name = slot_to_founder[fs]
 
-            mentor_points = expanded_mentor_prefs[ms].get(founder_name, 0)
-            founder_points = expanded_founder_prefs[fs].get(mentor_name, 0)
+def build_pair_scores(mentor_prefs, founder_prefs, overlap_bonus=DEFAULT_OVERLAP_BONUS):
+    candidate_pairs = set()
 
-            if mentor_points > 0 or founder_points > 0:
-                total = mentor_points + founder_points
-                if mentor_points > 0 and founder_points > 0:
-                    total += overlap_bonus
-                G.add_edge(ms, fs, weight=total)
+    for mentor_name, prefs in mentor_prefs.items():
+        for founder_name in prefs:
+            candidate_pairs.add((mentor_name, founder_name))
+
+    for founder_name, prefs in founder_prefs.items():
+        for mentor_name in prefs:
+            candidate_pairs.add((mentor_name, founder_name))
+
+    pair_scores = {}
+    for mentor_name, founder_name in sorted(candidate_pairs):
+        breakdown = get_pair_breakdown(
+            mentor_name, founder_name, mentor_prefs, founder_prefs, overlap_bonus=overlap_bonus
+        )
+        if breakdown["total_points"] > 0:
+            pair_scores[(mentor_name, founder_name)] = breakdown["total_points"]
+
+    return pair_scores
+
+
+############################################################################
+### 4. LOCK MUTUAL FIRST-CHOICE PAIRS
+############################################################################
+
+def lock_mutual_first_choice_pairs(mentor_prefs, founder_prefs, mentor_caps, founder_caps):
+    remaining_mentor_caps = dict(mentor_caps)
+    remaining_founder_caps = dict(founder_caps)
+    locked_pairs = []
+
+    for mentor_name in sorted(mentor_prefs):
+        if remaining_mentor_caps.get(mentor_name, 0) <= 0:
+            continue
+
+        founder_name = top_choice_name(mentor_prefs[mentor_name])
+        if not founder_name:
+            continue
+        if remaining_founder_caps.get(founder_name, 0) <= 0:
+            continue
+
+        founder_top_choice = top_choice_name(founder_prefs.get(founder_name, {}))
+        if founder_top_choice == mentor_name:
+            locked_pairs.append((mentor_name, founder_name))
+            remaining_mentor_caps[mentor_name] -= 1
+            remaining_founder_caps[founder_name] -= 1
+
+    return locked_pairs, remaining_mentor_caps, remaining_founder_caps
+
+
+############################################################################
+### 5. MAX-CARDINALITY, THEN MAX-SCORE SOLVER
+############################################################################
+
+def build_capacity_graph(mentor_caps, founder_caps, pair_scores, excluded_pairs=None):
+    excluded_pairs = excluded_pairs or set()
+
+    G = nx.DiGraph()
+    source = "__SOURCE__"
+    sink = "__SINK__"
+
+    G.add_node(source)
+    G.add_node(sink)
+
+    for mentor_name in sorted(mentor_caps):
+        cap = mentor_caps[mentor_name]
+        if cap > 0:
+            G.add_edge(source, ("mentor", mentor_name), capacity=cap)
+
+    for founder_name in sorted(founder_caps):
+        cap = founder_caps[founder_name]
+        if cap > 0:
+            G.add_edge(("founder", founder_name), sink, capacity=cap)
+
+    for (mentor_name, founder_name), score in sorted(pair_scores.items()):
+        if score <= 0:
+            continue
+        if (mentor_name, founder_name) in excluded_pairs:
+            continue
+        if mentor_caps.get(mentor_name, 0) <= 0:
+            continue
+        if founder_caps.get(founder_name, 0) <= 0:
+            continue
+
+        G.add_edge(("mentor", mentor_name), ("founder", founder_name), capacity=1)
+
+    return G, source, sink
+
+
+def build_min_cost_graph(mentor_caps, founder_caps, pair_scores, required_flow, excluded_pairs=None):
+    excluded_pairs = excluded_pairs or set()
+
+    G = nx.DiGraph()
+    source = "__SOURCE__"
+    sink = "__SINK__"
+
+    G.add_node(source, demand=-required_flow)
+    G.add_node(sink, demand=required_flow)
+
+    max_pair_score = max(pair_scores.values(), default=0)
+    cost_shift = max_pair_score + 1
+
+    for mentor_name in sorted(mentor_caps):
+        cap = mentor_caps[mentor_name]
+        if cap > 0:
+            G.add_edge(source, ("mentor", mentor_name), capacity=cap, weight=0)
+
+    for founder_name in sorted(founder_caps):
+        cap = founder_caps[founder_name]
+        if cap > 0:
+            G.add_edge(("founder", founder_name), sink, capacity=cap, weight=0)
+
+    for (mentor_name, founder_name), score in sorted(pair_scores.items()):
+        if score <= 0:
+            continue
+        if (mentor_name, founder_name) in excluded_pairs:
+            continue
+        if mentor_caps.get(mentor_name, 0) <= 0:
+            continue
+        if founder_caps.get(founder_name, 0) <= 0:
+            continue
+
+        G.add_edge(
+            ("mentor", mentor_name),
+            ("founder", founder_name),
+            capacity=1,
+            weight=cost_shift - score,
+        )
 
     return G
 
 
-def run_maximum_cardinality_max_weight(G):
-    """
-    Return the edges from nx.max_weight_matching(G, maxcardinality=True).
-    Yields a set of frozensets({nodeA, nodeB}).
-    """
-    return nx.max_weight_matching(G, maxcardinality=True)
+def solve_remaining_pairs(mentor_caps, founder_caps, pair_scores, excluded_pairs=None):
+    excluded_pairs = excluded_pairs or set()
+
+    capacity_graph, source, sink = build_capacity_graph(
+        mentor_caps, founder_caps, pair_scores, excluded_pairs=excluded_pairs
+    )
+    max_cardinality = nx.maximum_flow_value(capacity_graph, source, sink)
+
+    if max_cardinality == 0:
+        return []
+
+    min_cost_graph = build_min_cost_graph(
+        mentor_caps,
+        founder_caps,
+        pair_scores,
+        required_flow=max_cardinality,
+        excluded_pairs=excluded_pairs,
+    )
+    _, flow_dict = nx.network_simplex(min_cost_graph)
+
+    selected_pairs = []
+    for mentor_name in sorted(mentor_caps):
+        mentor_node = ("mentor", mentor_name)
+        if mentor_node not in flow_dict:
+            continue
+
+        for neighbor, flow in flow_dict[mentor_node].items():
+            if flow != 1:
+                continue
+            if isinstance(neighbor, tuple) and len(neighbor) == 2 and neighbor[0] == "founder":
+                founder_name = neighbor[1]
+                selected_pairs.append((mentor_name, founder_name))
+
+    return sorted(selected_pairs)
+
 
 ############################################################################
-### 4. CHOICE LABEL HELPER
+### 6. MAIN FUNCTION STREAMLIT WILL CALL
 ############################################################################
 
-def choice_label(points):
-    """
-    Convert the 5-4-3-2-1 system into "First Choice", "Second Choice", etc.
-    """
-    if points == 5:
-        return "First Choice"
-    elif points == 4:
-        return "Second Choice"
-    elif points == 3:
-        return "Third Choice"
-    elif points == 2:
-        return "Fourth Choice"
-    elif points == 1:
-        return "Fifth Choice"
-    else:
-        return "Unranked"
-
-############################################################################
-### 5. THE FUNCTION STREAMLIT WILL CALL
-############################################################################
-
-def run_matching(mentor_csv_path, founder_csv_path):
-    """
-    The function that Streamlit calls.
-    Reads the CSVs, runs the matching, and returns two items:
-      1) result_lines: multi-line text output for display.
-      2) pairs_data:   a list of dicts for CSV export with the columns:
-             Mentor Name, Venture Name, Mentor's Choice,
-             Venture's Choice, Total Points
-             (For Mentor's and Venture's Choice, we include the name in the text.)
-    """
-
-    # 1. Load data
+def run_matching(
+    mentor_csv_path,
+    founder_csv_path,
+    founder_capacity=DEFAULT_FOUNDER_CAPACITY,
+    overlap_bonus=DEFAULT_OVERLAP_BONUS,
+):
     mentor_prefs, mentor_caps = load_mentor_data(mentor_csv_path)
     founder_prefs = load_founder_data(founder_csv_path)
 
-    # 2. Suppose each founder can match 2 times
-    founder_caps = {f: 2 for f in founder_prefs}
+    validate_cross_references(mentor_prefs, founder_prefs)
 
-    # 3. Expand mentors & founders
-    expanded_mentor_prefs, slot_to_mentor = expand_mentors_by_capacity(mentor_prefs, mentor_caps)
-    expanded_founder_prefs, slot_to_founder = expand_founders_by_capacity(founder_prefs, founder_caps)
+    founder_caps = {founder_name: founder_capacity for founder_name in founder_prefs}
 
-    # 4. Build bipartite graph and match
-    overlap_bonus = 2
-    G = build_bipartite_graph(expanded_mentor_prefs, slot_to_mentor,
-                              expanded_founder_prefs, slot_to_founder,
-                              overlap_bonus=overlap_bonus)
+    locked_pairs, remaining_mentor_caps, remaining_founder_caps = lock_mutual_first_choice_pairs(
+        mentor_prefs, founder_prefs, mentor_caps, founder_caps
+    )
 
-    matched_edges = run_maximum_cardinality_max_weight(G)
+    pair_scores = build_pair_scores(
+        mentor_prefs, founder_prefs, overlap_bonus=overlap_bonus
+    )
 
-    used_pairs = set()
-    total_weight = 0.0
+    locked_set = set(locked_pairs)
+
+    remaining_pairs = solve_remaining_pairs(
+        remaining_mentor_caps,
+        remaining_founder_caps,
+        pair_scores,
+        excluded_pairs=locked_set,
+    )
+
+    final_pairs = locked_pairs + remaining_pairs
+
+    pair_records = []
+    for mentor_name, founder_name in final_pairs:
+        breakdown = get_pair_breakdown(
+            mentor_name, founder_name, mentor_prefs, founder_prefs, overlap_bonus=overlap_bonus
+        )
+        pair_records.append({
+            "mentor_name": mentor_name,
+            "founder_name": founder_name,
+            "mentor_points": breakdown["mentor_points"],
+            "founder_points": breakdown["founder_points"],
+            "total_points": breakdown["total_points"],
+            "locked": (mentor_name, founder_name) in locked_set,
+        })
+
+    pair_records.sort(
+        key=lambda r: (
+            0 if r["locked"] else 1,
+            -r["total_points"],
+            r["mentor_name"].lower(),
+            r["founder_name"].lower(),
+        )
+    )
+
+    total_weight = sum(record["total_points"] for record in pair_records)
+
     result_lines = []
-    pairs_data = []  # for CSV export
+    pairs_data = []
 
-    match_index = 1
+    if locked_pairs:
+        result_lines.append("=== Locked Mutual First-Choice Matches ===")
+        result_lines.append("These pairs were matched automatically before optimization.")
+        result_lines.append("")
 
-    for edge in matched_edges:
-        nodeA, nodeB = list(edge)
-        # Determine which is mentor slot vs. founder slot
-        if nodeA in expanded_mentor_prefs:
-            ms, fs = nodeA, nodeB
-        else:
-            ms, fs = nodeB, nodeA
+    for idx, record in enumerate(pair_records, start=1):
+        mentor_name = record["mentor_name"]
+        founder_name = record["founder_name"]
+        mentor_points = record["mentor_points"]
+        founder_points = record["founder_points"]
+        total_points = record["total_points"]
 
-        mentor_name = slot_to_mentor[ms]
-        founder_name = slot_to_founder[fs]
+        result_lines.append(f"Match {idx}")
+        result_lines.append(f"{mentor_name} <----> {founder_name}")
 
-        if (mentor_name, founder_name) in used_pairs:
-            continue
-        used_pairs.add((mentor_name, founder_name))
+        if record["locked"]:
+            result_lines.append("- Locked because both ranked each other First Choice")
 
-        # Synergy (total points)
-        w = G[nodeA][nodeB]["weight"]
-        total_weight += w
+        result_lines.append(
+            f"- {mentor_name}'s {choice_label(mentor_points)} and {founder_name}'s {choice_label(founder_points)}"
+        )
+        result_lines.append(f"- Total Points = {total_points}")
+        result_lines.append("")
 
-        # Retrieve rank points for each side
-        mentor_points = expanded_mentor_prefs[ms].get(founder_name, 0)
-        founder_points = expanded_founder_prefs[fs].get(mentor_name, 0)
-
-        # Build multi-line text output
-        heading = f"Match {match_index}"
-        line1 = f"{mentor_name} <----> {founder_name}"
-        line2 = f"- {mentor_name}'s {choice_label(mentor_points)} and {founder_name}'s {choice_label(founder_points)}"
-        line3 = f"- Total Points = {w}"
-
-        result_lines.append(heading)
-        result_lines.append(line1)
-        result_lines.append(line2)
-        result_lines.append(line3)
-        result_lines.append("")  # blank line for spacing
-
-        # Build CSV row (with extended text in columns C and D)
         pairs_data.append({
             "Mentor Name": mentor_name,
             "Venture Name": founder_name,
             "Mentor's Choice": f"{mentor_name}'s {choice_label(mentor_points)}",
             "Venture's Choice": f"{founder_name}'s {choice_label(founder_points)}",
-            "Total Points": w
+            "Total Points": total_points,
         })
 
-        match_index += 1
-
-    # Append summary lines to the multi-line output
-    result_lines.append(f"Number of unique mentor–founder pairs: {len(used_pairs)}")
+    result_lines.append(f"Number of unique mentor–founder pairs: {len(pair_records)}")
     result_lines.append(f"Total synergy across matched pairs: {total_weight}")
 
-    # Build match count summaries for mentors and founders
-    mentor_match_counts = {}
-    founder_match_counts = {}
+    mentor_match_counts = {mentor_name: 0 for mentor_name in mentor_prefs}
+    founder_match_counts = {founder_name: 0 for founder_name in founder_prefs}
 
-    for mentor, founder in used_pairs:
-        mentor_match_counts[mentor] = mentor_match_counts.get(mentor, 0) + 1
-        founder_match_counts[founder] = founder_match_counts.get(founder, 0) + 1
+    for record in pair_records:
+        mentor_match_counts[record["mentor_name"]] += 1
+        founder_match_counts[record["founder_name"]] += 1
 
     result_lines.append("")
     result_lines.append("=== Mentor Matches ===")
-    for mentor, count in mentor_match_counts.items():
-        # mentor_caps holds the capacity for each mentor
-        cap = mentor_caps.get(mentor, "?")
-        result_lines.append(f"{mentor}: {count}/{cap} matches")
+    for mentor_name in sorted(mentor_match_counts):
+        cap = mentor_caps[mentor_name]
+        count = mentor_match_counts[mentor_name]
+        result_lines.append(f"{mentor_name}: {count}/{cap} matches")
 
     result_lines.append("")
     result_lines.append("=== Founder Matches ===")
-    for founder, count in founder_match_counts.items():
-        # For founders we default to a capacity of 2
-        result_lines.append(f"{founder}: {count}/2 matches")
+    for founder_name in sorted(founder_match_counts):
+        cap = founder_caps[founder_name]
+        count = founder_match_counts[founder_name]
+        result_lines.append(f"{founder_name}: {count}/{cap} matches")
+
+    unmatched_mentors = [m for m, count in sorted(mentor_match_counts.items()) if count == 0]
+    unmatched_founders = [f for f, count in sorted(founder_match_counts.items()) if count == 0]
+
+    result_lines.append("")
+    result_lines.append("=== Unmatched Mentors ===")
+    result_lines.extend(unmatched_mentors or ["None"])
+
+    result_lines.append("")
+    result_lines.append("=== Unmatched Founders ===")
+    result_lines.extend(unmatched_founders or ["None"])
     result_lines.append("")
 
     return result_lines, pairs_data
 
 
 if __name__ == "__main__":
-    test_output, test_data = run_matching("Mentor Matching_Mentor Rankings-Grid view.csv",
-                                          "Mentor Matching_Founder Rankings-Grid view.csv")
+    test_output, test_data = run_matching(
+        "Mentor Matching_Mentor Rankings-Grid view.csv",
+        "Mentor Matching_Founder Rankings-Grid view.csv",
+    )
     for line in test_output:
         print(line)
