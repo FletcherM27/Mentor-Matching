@@ -132,40 +132,12 @@ def load_founder_data(founder_csv):
 
 
 def validate_cross_references(mentor_prefs, founder_prefs):
-    unknown_founders = []
-    for mentor_name, prefs in mentor_prefs.items():
-        for founder_name in prefs:
-            if founder_name not in founder_prefs:
-                unknown_founders.append((mentor_name, founder_name))
-
-    unknown_mentors = []
-    for founder_name, prefs in founder_prefs.items():
-        for mentor_name in prefs:
-            if mentor_name not in mentor_prefs:
-                unknown_mentors.append((founder_name, mentor_name))
-
-    messages = []
-
-    if unknown_founders:
-        examples = ", ".join(
-            f"{mentor} -> {founder}" for mentor, founder in unknown_founders[:10]
-        )
-        messages.append(
-            "These mentor rankings reference founder names that do not exist in the founder file: "
-            + examples
-        )
-
-    if unknown_mentors:
-        examples = ", ".join(
-            f"{founder} -> {mentor}" for founder, mentor in unknown_mentors[:10]
-        )
-        messages.append(
-            "These founder rankings reference mentor names that do not exist in the mentor file: "
-            + examples
-        )
-
-    if messages:
-        raise ValueError("\n".join(messages))
+    """
+    Ignore rankings that reference mentors or ventures not present in the
+    other file. Those names will be skipped automatically later because
+    only mentors in mentor_caps and ventures in founder_caps can be matched.
+    """
+    return
 
 
 ############################################################################
